@@ -1,0 +1,115 @@
+# n8n + OVMS Gateway + OpenVINO Model Server + PostgreSQL
+#
+# Architecture:
+#   n8n (port 5678) → Gateway (port 8000) → Real OVMS (port 9001)
+#   n8n sends plain text → Gateway tokenizes → OVMS runs inference
+#
+# Usage:
+#   cd deployment
+#   docker compose up -d
+#   Open http://localhost:5678 for n8n
+#   Set OVMS credential URL to: http://gateway:8000
+
+services:
+
+  # --- Real OpenVINO Model Server ---
+  # Official Intel OVMS container serving the DistilBERT text-classifier.
+  ovms:
+    image: openvino/model_server:latest
+    container_name: ovms
+    restart: unless-stopped
+    ports:
+      - "9000:9000"   # gRPC
+      - "9001:9001"   # REST
+    volumes:
+      - ./models:/models:ro
+      - ./config.json:/config.json:ro
+    command: >
+      --config_path /config.json
+      --port 9000
+      --rest_port 9001
+      --log_level INFO
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9001/v1/config || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # --- OVMS Gateway ---
+  # Preprocessor service: accepts plain text from n8n, tokenizes it,
+  # forwards tokenized tensors to OVMS, interprets results.
+  # n8n connects to THIS service, not directly to OVMS.
+  gateway:
+    build:
+      context: ../gateway
+      dockerfile: Dockerfile
+    container_name: ovms-gateway
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - OVMS_URL=http://ovms:9001
+      - TOKENIZER_PATH=/models/tokenizer
+      - GATEWAY_PORT=8000
+    volumes:
+      - ./models/tokenizer-backup:/models/tokenizer:ro
+    depends_on:
+      ovms:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # --- PostgreSQL Database ---
+  postgres:
+    image: postgres:15-alpine
+    container_name: n8n-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: n8n
+      POSTGRES_USER: n8n
+      POSTGRES_PASSWORD: n8npassword
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U n8n"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- n8n Workflow Engine ---
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n-openvino
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=n8n
+      - DB_POSTGRESDB_USER=n8n
+      - DB_POSTGRESDB_PASSWORD=n8npassword
+      - N8N_DIAGNOSTICS_ENABLED=false
+      - WEBHOOK_URL=http://localhost:5678/
+      - N8N_CUSTOM_EXTENSIONS=/custom-node
+      - OVMS_GATEWAY_URL=http://gateway:8000
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ..:/custom-node:ro
+      - ./incoming:/data/incoming
+      - ./processed:/data/processed
+    depends_on:
+      postgres:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  n8n_data:

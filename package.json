@@ -1,0 +1,41 @@
+{
+  "name": "n8n-nodes-openvino",
+  "version": "0.1.0",
+  "description": "n8n custom node for OpenVINO Model Server integration with GPU/NPU support",
+  "keywords": [
+    "n8n-community-node-package",
+    "openvino",
+    "ai",
+    "intel",
+    "gpu",
+    "npu"
+  ],
+  "license": "Apache-2.0",
+  "author": {
+    "name": "Nandkishore"
+  },
+  "main": "dist/nodes/OpenVinoModelServer/OpenVinoModelServer.node.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "lint": "eslint nodes credentials --ext .ts",
+    "prepublishOnly": "npm run build"
+  },
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "credentials": [
+      "dist/credentials/OpenVinoModelServerApi.credentials.js"
+    ],
+    "nodes": [
+      "dist/nodes/OpenVinoModelServer/OpenVinoModelServer.node.js"
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.1",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "n8n-core": "^1.122.16",
+    "n8n-workflow": "^1.120.9"
+  }
+}
