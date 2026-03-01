@@ -23,7 +23,7 @@ Results flow back: OVMS → Gateway → n8n
 - **OVMS** — Intel's official model serving container (`openvino/model_server:latest`) that runs the actual inference
 - **DistilBERT** — pre-trained sentiment classifier converted to OpenVINO IR format
 
-## Working Demo
+## workflow Demo
 
 ![n8n workflow with OpenVINO Model Server](image.png)
 ## Features
