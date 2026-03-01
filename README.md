@@ -26,7 +26,6 @@ Results flow back: OVMS → Gateway → n8n
 ## Working Demo
 
 ![n8n workflow with OpenVINO Model Server](image.png)
-
 ## Features
 
 - **3 operations** in the custom n8n node:
