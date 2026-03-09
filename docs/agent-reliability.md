@@ -55,7 +55,7 @@ The agent takes different paths based on sentiment analysis results:
 ## Error Handling
 
 | Error Type | How It's Handled |
-|---|---|---|
+|---|---|
 | Malformed tool call JSON | Caught with try/catch, empty args used |
 | Unknown tool name | Returns `{error: "Unknown tool: <name>"}` back to LLM |
 | Tool execution failure (OVMS down) | Error message fed back to LLM as tool result |
