@@ -1,14 +1,16 @@
-# n8n + OVMS Gateway + OpenVINO Model Server + PostgreSQL
+# n8n + OVMS (Classic + LLM) + Gateway + PostgreSQL
 #
 # Architecture:
-#   n8n (port 5678) → Gateway (port 8000) → Real OVMS (port 9001)
-#   n8n sends plain text → Gateway tokenizes → OVMS runs inference
+#   Classic:  n8n → Gateway (port 8000) → OVMS (port 9001) — sentiment classification
+#   Agentic:  n8n → OVMS-LLM (port 8080) — LLM with tool calling
+#             OVMS-LLM decides tools → n8n executes → results back to LLM
 #
 # Usage:
 #   cd deployment
 #   docker compose up -d
 #   Open http://localhost:5678 for n8n
-#   Set OVMS credential URL to: http://gateway:8000
+#   Classic credential URL: http://gateway:8000
+#   LLM Server URL: http://ovms-llm:8000
 
 services:
 
@@ -63,6 +65,34 @@ services:
       timeout: 5s
       retries: 3
 
+  # --- OVMS LLM Service (Qwen2.5 for agentic workflows) ---
+  # Serves Qwen2.5-1.5B-Instruct with OpenAI-compatible chat/completions API.
+  # Supports function/tool calling for agentic workflows.
+  # Auto-downloads model from HuggingFace on first run (~1.5GB).
+  ovms-llm:
+    image: openvino/model_server:latest
+    container_name: ovms-llm
+    restart: unless-stopped
+    user: "0"
+    ports:
+      - "8080:8000"   # REST (OpenAI-compatible /v3/chat/completions)
+    volumes:
+      - ovms_llm_models:/models:rw
+    command: >
+      --source_model OpenVINO/Qwen2.5-1.5B-Instruct-int4-ov
+      --model_repository_path /models
+      --task text_generation
+      --rest_port 8000
+      --cache_size 2
+      --tool_parser hermes3
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/v1/models || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 120s
+    mem_limit: 6g
+
   # --- PostgreSQL Database ---
   postgres:
     image: postgres:15-alpine
@@ -74,7 +104,6 @@ services:
       POSTGRES_PASSWORD: n8npassword
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U n8n"]
       interval: 10s
@@ -99,6 +128,7 @@ services:
       - WEBHOOK_URL=http://localhost:5678/
       - N8N_CUSTOM_EXTENSIONS=/custom-node
       - OVMS_GATEWAY_URL=http://gateway:8000
+      - OVMS_LLM_URL=http://ovms-llm:8000
     volumes:
       - n8n_data:/home/node/.n8n
       - ..:/custom-node:ro
@@ -113,3 +143,4 @@ services:
 volumes:
   postgres_data:
   n8n_data:
+  ovms_llm_models:

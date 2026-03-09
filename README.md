@@ -4,37 +4,48 @@
 
 ## Architecture
 
+### Classic Inference (Sentiment Analysis)
 ```
-n8n (custom node)
-  |  sends plain text
-  v
-Gateway (Python, port 8000)
-  |  tokenizes text into tensors
-  v
-OpenVINO Model Server (port 9001)
-  |  runs DistilBERT inference
-  v
-Results flow back: OVMS → Gateway → n8n
-  (logits)    (human-readable)   (displayed in UI)
+n8n → Gateway (tokenizes text) → OVMS (DistilBERT) → Results back to n8n
 ```
+
+### Agentic Workflow (Customer Support Triage)
+```
+[Webhook: POST /support]
+        |
+        v
+[OVMS Agent Loop] — Qwen2.5-1.5B on OVMS-LLM decides what to do:
+        |
+        ├── analyze_sentiment → Gateway → OVMS (DistilBERT) → POSITIVE/NEGATIVE
+        |
+        ├── (if NEGATIVE) lookup_knowledge_base → finds relevant FAQ articles
+        ├── (if NEGATIVE) draft_response → generates apology + solution
+        |
+        ├── create_ticket → HIGH / MEDIUM / LOW priority
+        |
+        v
+[Respond to Webhook] — returns ticket + agent reasoning
+```
+
+The agent takes **different paths** depending on sentiment — 2 tool calls for positive messages, 4 for negative. This is genuinely agentic: a pipeline cannot do this.
 
 - **n8n** — no-code workflow UI where users configure and run AI tasks
-- **Gateway** — preprocessor that converts plain text to tokenized tensors and interprets results
-- **OVMS** — Intel's official model serving container (`openvino/model_server:latest`) that runs the actual inference
-- **DistilBERT** — pre-trained sentiment classifier converted to OpenVINO IR format
+- **OVMS (Classic)** — serves DistilBERT sentiment classifier via Gateway
+- **OVMS-LLM** — serves Qwen2.5-1.5B with OpenAI-compatible chat API and tool calling
+- **Gateway** — preprocessor that tokenizes text for classic model inference
 
-## workflow Demo
-
-![n8n workflow with OpenVINO Model Server](image.png)
 ## Features
 
-- **3 operations** in the custom n8n node:
+- **5 operations** in the custom n8n node:
+  - **Predict** — run inference on a classic model (sentiment analysis)
+  - **Chat Completion** — send a message to an LLM on OVMS
+  - **Agent Loop** — agentic workflow with tool calling (LLM decides which tools to use)
   - **List Models** — view all models deployed on OVMS
   - **Get Model Status** — check if a model is loaded and ready
-  - **Predict** — send text, get sentiment analysis (POSITIVE/NEGATIVE with confidence score)
+- **7 built-in agent tools** — analyze_sentiment, lookup_knowledge_base, draft_response, create_ticket, calculate, get_current_time, list_models
+- **Webhook-triggered** — live API endpoint, testable with curl
 - **Device selection** — CPU, GPU, NPU, or AUTO (via OpenVINO's AUTO plugin)
-- **Two API protocols** — KServe v2 and TensorFlow Serving v1
-- **Docker Compose** — single command to start the entire stack
+- **Docker Compose** — single command to start the entire stack (5 services)
 
 ## Project Structure
 
@@ -49,12 +60,13 @@ n8n-openvino/
 │   ├── server.py                     # Tokenization gateway (Python)
 │   └── Dockerfile
 ├── deployment/
-│   ├── docker-compose.yml            # 4 services: OVMS, Gateway, n8n, PostgreSQL
+│   ├── docker-compose.yml            # 5 services: OVMS, OVMS-LLM, Gateway, n8n, PostgreSQL
 │   ├── config.json                   # OVMS model configuration
 │   ├── models/                       # Model files (not in git)
 │   │   ├── text-classifier/1/        # DistilBERT OpenVINO IR (model.xml + model.bin)
 │   │   └── tokenizer-backup/         # HuggingFace tokenizer files
-│   └── sql/init.sql                  # PostgreSQL schema
+├── docs/
+│   └── agent-reliability.md          # Agent reliability and error handling notes
 ├── package.json
 └── tsconfig.json
 ```
@@ -65,7 +77,7 @@ n8n-openvino/
 
 - Docker Desktop
 - Node.js 18+
-- ~2GB disk space for model files
+- ~4GB disk space for model files (DistilBERT + Qwen2.5-1.5B auto-downloaded)
 
 ### 1. Clone and install
 
@@ -124,21 +136,99 @@ docker compose up -d
 |-----------|-----------|
 | n8n Node | TypeScript, n8n-workflow SDK |
 | Gateway | Python 3.12, HuggingFace Transformers |
-| Model Server | OpenVINO Model Server (official Intel container) |
-| Model | DistilBERT (OpenVINO IR format) |
+| Model Server | OpenVINO Model Server (official Intel container) x2 |
+| Classic Model | DistilBERT (OpenVINO IR format) |
+| LLM Model | Qwen2.5-1.5B-Instruct (INT4 quantized) |
 | Database | PostgreSQL 15 |
 | Orchestration | Docker Compose |
 
 ## How OVMS Is Used
 
-This project uses the **official OVMS container** (`openvino/model_server:latest`) — no custom inference code. OVMS handles:
+This project uses **two instances** of the official OVMS container (`openvino/model_server:latest`):
 
-- Model loading and memory management
-- REST API for inference requests
-- Hardware acceleration (CPU/GPU/NPU)
-- Model versioning and health checks
+| Instance | Model | Purpose | API |
+|----------|-------|---------|-----|
+| **OVMS (Classic)** | DistilBERT | Sentiment classification | TF Serving `/v1/models/...` |
+| **OVMS-LLM** | Qwen2.5-1.5B | Chat + tool calling | OpenAI-compatible `/v3/chat/completions` |
 
-The Gateway exists because OVMS expects raw tokenized tensors, but n8n users want to send plain text. The Gateway bridges this gap.
+The **agentic workflow** demonstrates both instances collaborating: the LLM on OVMS-LLM decides to call the `analyze_sentiment` tool, which routes through the Gateway to the classic OVMS for inference. Two OVMS instances, orchestrated by n8n.
+
+## Agentic Workflow Demo — Customer Support Triage
+
+The agent receives a customer message via webhook and autonomously triages it:
+
+### Test with curl
+
+```bash
+# Negative message → 4 tool calls (sentiment → KB → draft → ticket HIGH)
+curl -X POST http://localhost:5678/webhook/support \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Your product is terrible. It broke after one day and nobody responds!"}'
+
+# Positive message → 2 tool calls (sentiment → ticket LOW)
+curl -X POST http://localhost:5678/webhook/support \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Amazing product! Works perfectly with my Intel setup!"}'
+
+# Ambiguous message → 3 tool calls (sentiment → KB → ticket MEDIUM)
+curl -X POST http://localhost:5678/webhook/support \
+  -H "Content-Type: application/json" \
+  -d '{"message": "The product works but the setup was confusing. Not sure if configured right."}'
+```
+
+Each input produces a **different number of tool calls** — the agent decides what to do based on sentiment analysis results. This is what makes it agentic vs a fixed pipeline.
+
+### Sample Output (Negative Message)
+
+```json
+{
+  "success": true,
+  "ticket": {
+    "ticket_id": "TKT-MMG69TDH",
+    "priority": "HIGH",
+    "sentiment": "NEGATIVE",
+    "customer_message": "Your product is terrible. It broke after one day and nobody responds!",
+    "draft_response": "We sincerely apologize for your experience. We want to make this right — a support specialist will follow up within 24 hours.",
+    "status": "OPEN",
+    "assigned_to": "senior_support"
+  },
+  "agent_summary": "Ticket created successfully. Priority: HIGH. Sentiment: NEGATIVE. Assigned to senior support.",
+  "tool_calls": 4,
+  "latency_ms": 44685
+}
+```
+
+### Sample Output (Positive Message)
+
+```json
+{
+  "success": true,
+  "ticket": {
+    "ticket_id": "TKT-MMG6C55O",
+    "priority": "LOW",
+    "sentiment": "POSITIVE",
+    "customer_message": "Amazing product! Works perfectly with my Intel setup!",
+    "draft_response": "Thank you so much for your kind feedback! We're thrilled to hear you're enjoying the product.",
+    "status": "OPEN",
+    "assigned_to": "general_support"
+  },
+  "agent_summary": "Ticket created successfully. Priority: LOW. Sentiment: POSITIVE. Assigned to general support.",
+  "tool_calls": 4,
+  "latency_ms": 42618
+}
+```
+
+### Conditional Branching
+
+| Sentiment | Tool Calls | Priority | Assigned To |
+|---|---|---|---|
+| NEGATIVE | sentiment → KB lookup → draft response → create ticket | HIGH | senior_support |
+| POSITIVE | sentiment → create ticket | LOW | general_support |
+| UNCERTAIN | sentiment → KB lookup → create ticket | MEDIUM | general_support |
+
+The agent routes complaints to senior support with a drafted apology, while positive feedback gets a simple thank-you ticket. **The LLM decides the path at runtime — it is not hardcoded.**
+
+See [docs/agent-reliability.md](docs/agent-reliability.md) for reliability notes, the nudge system for small models, error handling, and performance details.
 
 ## GSoC 2026 — Future Scope
 
@@ -148,6 +238,7 @@ This demo covers the core architecture. The full GSoC project would extend it wi
 - Dynamic model loading through n8n UI
 - GPU/NPU device switching at runtime
 - Batch inference for processing multiple documents
+- Streaming responses for LLM operations
 - Performance benchmarking across devices
 
 ---

@@ -1,0 +1,82 @@
+{
+  "name": "Customer Support Triage Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "support",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-1",
+      "name": "Webhook: POST /support",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 400],
+      "webhookId": "support-triage"
+    },
+    {
+      "parameters": {
+        "operation": "agentLoop",
+        "llmServerUrl": "http://ovms-llm:8000",
+        "llmModel": "OpenVINO/Qwen2.5-1.5B-Instruct-int4-ov",
+        "systemPrompt": "You are a customer support triage agent. Execute ALL steps automatically without asking questions. Do NOT stop early. Do NOT ask for confirmation.\n\nSTEP 1: Call analyze_sentiment with the exact customer message.\nSTEP 2: Check the sentiment result, then:\n  - If NEGATIVE (label=NEGATIVE): Call lookup_knowledge_base with keywords from the message. Then call draft_response with sentiment=NEGATIVE, the customer message, and KB context. Then call create_ticket with priority=HIGH.\n  - If POSITIVE (label=POSITIVE, confidence > 0.85): Call create_ticket with priority=LOW.\n  - If UNCERTAIN (confidence < 0.85): Call lookup_knowledge_base with keywords. Then call create_ticket with priority=MEDIUM.\nSTEP 3: After create_ticket, give a final summary with the ticket ID, priority, and what actions you took.\n\nIMPORTANT: Execute every step. Never stop after just one tool call. Always finish with create_ticket and a summary.",
+        "userMessage": "={{$json.body.message || $json.message || 'No message provided'}}",
+        "toolsDefinition": "[{\"type\":\"function\",\"function\":{\"name\":\"analyze_sentiment\",\"description\":\"Analyze customer message sentiment using DistilBERT on OpenVINO Model Server. Returns POSITIVE or NEGATIVE with confidence score.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\",\"description\":\"The customer message to analyze\"}},\"required\":[\"text\"]}}},{\"type\":\"function\",\"function\":{\"name\":\"lookup_knowledge_base\",\"description\":\"Search the support knowledge base for articles relevant to the customer issue. Use keywords from the customer message.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"Search keywords from the customer issue\"}},\"required\":[\"query\"]}}},{\"type\":\"function\",\"function\":{\"name\":\"draft_response\",\"description\":\"Generate a draft customer response based on sentiment and knowledge base context.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"sentiment\":{\"type\":\"string\",\"description\":\"POSITIVE, NEGATIVE, or NEUTRAL\"},\"customer_message\":{\"type\":\"string\",\"description\":\"Original customer message\"},\"kb_context\":{\"type\":\"string\",\"description\":\"Relevant info from knowledge base lookup\"}},\"required\":[\"sentiment\",\"customer_message\"]}}},{\"type\":\"function\",\"function\":{\"name\":\"create_ticket\",\"description\":\"Create a prioritized support ticket. Use HIGH for negative, MEDIUM for neutral, LOW for positive sentiment.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"customer_message\":{\"type\":\"string\",\"description\":\"The original customer message\"},\"priority\":{\"type\":\"string\",\"enum\":[\"HIGH\",\"MEDIUM\",\"LOW\"],\"description\":\"Ticket priority based on sentiment\"},\"sentiment\":{\"type\":\"string\",\"description\":\"Detected sentiment\"},\"draft_response\":{\"type\":\"string\",\"description\":\"Draft response for the customer\"}},\"required\":[\"customer_message\",\"priority\",\"sentiment\"]}}}]",
+        "maxIterations": 8,
+        "temperature": 0.1,
+        "maxTokens": 2048
+      },
+      "id": "agent-1",
+      "name": "OVMS Support Agent",
+      "type": "n8n-nodes-openvino.openVinoModelServer",
+      "typeVersion": 1,
+      "position": [500, 400],
+      "credentials": {
+        "openVinoModelServerApi": {
+          "id": "1",
+          "name": "OpenVINO Model Server API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { success: true, ticket: $json.iterations ? $json.iterations[$json.iterations.length - 1] : {}, agent_summary: $json.finalAnswer, tool_calls: $json.totalIterations, latency_ms: $json._meta.totalLatencyMs } }}",
+        "options": {}
+      },
+      "id": "respond-1",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [800, 400]
+    }
+  ],
+  "connections": {
+    "Webhook: POST /support": {
+      "main": [
+        [
+          {
+            "node": "OVMS Support Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OVMS Support Agent": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
