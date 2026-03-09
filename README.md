@@ -34,6 +34,20 @@ The agent takes **different paths** depending on sentiment — 2 tool calls for 
 - **OVMS-LLM** — serves Qwen2.5-1.5B with OpenAI-compatible chat API and tool calling
 - **Gateway** — preprocessor that tokenizes text for classic model inference
 
+## Demo
+
+### Workflow Canvas
+![n8n workflow](docs/screenshots/workflow.png)
+
+### Node Configuration (Agent Loop)
+![node config](docs/screenshots/node-config.png)
+
+### Negative Message → NEGATIVE Sentiment, Ticket Created
+![postman negative](docs/screenshots/postman-negative.png)
+
+### Positive Message → POSITIVE Sentiment, Ticket Created
+![postman positive](docs/screenshots/postman-positive.png)
+
 ## Features
 
 - **5 operations** in the custom n8n node:
