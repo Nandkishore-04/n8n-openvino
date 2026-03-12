@@ -1,0 +1,248 @@
+{
+  "name": "Combined Support Agent (Custom OVMS + AI Agent)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "support-v2",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-v2",
+      "name": "Webhook: POST /support-v2",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [100, 400],
+      "webhookId": "support-v2"
+    },
+    {
+      "parameters": {
+        "operation": "predict",
+        "modelName": "text-classifier",
+        "apiVersion": "v1",
+        "inputData": "={{ { \"text\": $json.body.message || $json.message || \"No message\" } }}"
+      },
+      "id": "ovms-sentiment",
+      "name": "OVMS Sentiment Analysis",
+      "type": "n8n-nodes-openvino.openVinoModelServer",
+      "typeVersion": 1,
+      "position": [400, 400],
+      "credentials": {
+        "openVinoModelServerApi": {
+          "id": "1",
+          "name": "OpenVINO Model Server API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "agent": "toolsAgent",
+        "promptType": "define",
+        "text": "Customer message: {{ $('Webhook: POST /support-v2').item.json.body.message }}\n\nSentiment analysis result: {{ $json.predictions[0].label }} (confidence: {{ $json.predictions[0].confidence }})\n\nYou MUST use the tools provided. Do NOT write responses yourself. Follow these steps exactly:\n\nSTEP 1: Call lookup_knowledge_base with keywords from the customer message.\nSTEP 2: Call create_ticket with customer_message, priority (HIGH if NEGATIVE, LOW if POSITIVE, MEDIUM otherwise), and sentiment.\nSTEP 3: After BOTH tools have been called, write a brief summary.",
+        "options": {
+          "systemMessage": "You are a customer support agent. You MUST call tools to do your work. NEVER write ticket details or knowledge base results yourself. You MUST call lookup_knowledge_base first, then call create_ticket. Do NOT skip any tool calls. Do NOT generate fake ticket IDs. Only give a final text response AFTER you have called both tools.",
+          "maxIterations": 8
+        }
+      },
+      "id": "ai-agent-1",
+      "name": "AI Agent (n8n Built-in)",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2,
+      "position": [700, 400]
+    },
+    {
+      "parameters": {
+        "model": "OpenVINO/Qwen2.5-1.5B-Instruct-int4-ov",
+        "options": {
+          "temperature": 0.1,
+          "maxTokens": 2048
+        }
+      },
+      "id": "openai-chat-1",
+      "name": "OpenAI Chat Model (OVMS)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [500, 650],
+      "credentials": {
+        "openAiApi": {
+          "id": "ovms-openai",
+          "name": "OVMS LLM (OpenAI Compatible)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $execution.id }}"
+      },
+      "id": "memory-1",
+      "name": "Window Buffer Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [650, 650]
+    },
+    {
+      "parameters": {
+        "name": "lookup_knowledge_base",
+        "description": "Search the support knowledge base for articles matching the customer issue. Input: search keywords.",
+        "jsCode": "const query = $input.item.json.query || $input.item.json.input || '';\nconst queryLower = query.toLowerCase();\n\nconst articles = [\n  { id: 'KB001', title: 'Product Return Policy', content: 'Items can be returned within 30 days. Contact support for a return label.' },\n  { id: 'KB002', title: 'Troubleshooting Common Issues', content: 'Try restarting the device. If issue persists, perform a factory reset via Settings > Reset.' },\n  { id: 'KB003', title: 'Billing and Refund FAQ', content: 'Refunds are processed within 5-7 business days. Check email for confirmation.' },\n  { id: 'KB004', title: 'Shipping Delays', content: 'Current shipping times are 5-10 business days. Expedited shipping available.' },\n  { id: 'KB005', title: 'Account Security', content: 'Enable two-factor auth in Settings > Security. Contact support if you suspect unauthorized access.' },\n  { id: 'KB006', title: 'Product Setup Guide', content: 'Follow the quick start guide. Video tutorials at support.example.com/setup.' },\n];\n\nconst matches = articles.filter(a =>\n  queryLower.split(' ').some(word => word.length > 3 && (a.title.toLowerCase().includes(word) || a.content.toLowerCase().includes(word)))\n);\n\nconst result = matches.length > 0\n  ? matches.map(a => `[${a.id}] ${a.title}: ${a.content}`).join('\\n')\n  : 'No matching articles found.';\n\nreturn [{ json: { response: result } }];"
+      },
+      "id": "tool-kb",
+      "name": "Knowledge Base Lookup (Code Tool)",
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "typeVersion": 1.1,
+      "position": [800, 650]
+    },
+    {
+      "parameters": {
+        "name": "create_ticket",
+        "description": "Create a support ticket. Required inputs: customer_message (the original message), priority (HIGH, MEDIUM, or LOW), sentiment (POSITIVE, NEGATIVE, or NEUTRAL). Returns ticket ID and details.",
+        "jsCode": "const input = $input.item.json;\nconst customerMessage = input.customer_message || input.input || 'No message';\nconst priority = (input.priority || 'MEDIUM').toUpperCase();\nconst sentiment = (input.sentiment || 'NEUTRAL').toUpperCase();\n\nconst ticketId = 'TKT-' + Date.now().toString(36).toUpperCase();\nconst assignmentMap = { 'HIGH': 'Senior Support Team', 'MEDIUM': 'General Support', 'LOW': 'Auto-Response Queue' };\nconst slaMap = { 'HIGH': '4 hours', 'MEDIUM': '24 hours', 'LOW': '48 hours' };\nconst draftTemplates = {\n  'NEGATIVE': 'We sincerely apologize. A support specialist will follow up within 24 hours.',\n  'POSITIVE': 'Thank you for your kind feedback! We are thrilled you enjoy the product.',\n  'NEUTRAL': 'Thank you for reaching out. We want to ensure you have the best experience.',\n};\n\nconst ticket = {\n  ticket_id: ticketId,\n  priority,\n  sentiment,\n  customer_message: customerMessage.substring(0, 200),\n  assigned_to: assignmentMap[priority] || 'General Support',\n  sla: slaMap[priority] || '24 hours',\n  draft_response: draftTemplates[sentiment] || draftTemplates['NEUTRAL'],\n  status: 'OPEN',\n  created_at: new Date().toISOString(),\n};\n\nreturn [{ json: { response: JSON.stringify(ticket) } }];"
+      },
+      "id": "tool-ticket",
+      "name": "Create Ticket (Code Tool)",
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "typeVersion": 1.1,
+      "position": [950, 650]
+    },
+    {
+      "parameters": {},
+      "id": "tool-calc",
+      "name": "Calculator",
+      "type": "@n8n/n8n-nodes-langchain.toolCalculator",
+      "typeVersion": 1,
+      "position": [1100, 650]
+    },
+    {
+      "parameters": {
+        "name": "analyze_sentiment",
+        "description": "Analyze the sentiment of a text message using DistilBERT on OpenVINO Model Server. Input: the text to analyze. Returns sentiment label (POSITIVE/NEGATIVE) and confidence score.",
+        "workflowId": "={{ $('Sentiment Analysis Tool (OVMS)').id }}",
+        "specifyInputSchema": true,
+        "schemaType": "fromJson",
+        "jsonSchemaExample": "{ \"query\": \"I love this product\" }"
+      },
+      "id": "tool-sentiment",
+      "name": "Sentiment Analysis (Workflow Tool)",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2,
+      "position": [1250, 650]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { success: true, message: $('Webhook: POST /support-v2').item.json.body.message, sentiment: $('OpenVINO Model Server1').item.json.predictions[0], agent_response: $json.output } }}",
+        "options": {}
+      },
+      "id": "respond-1",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1000, 400]
+    }
+  ],
+  "connections": {
+    "Webhook: POST /support-v2": {
+      "main": [
+        [
+          {
+            "node": "OVMS Sentiment Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OVMS Sentiment Analysis": {
+      "main": [
+        [
+          {
+            "node": "AI Agent (n8n Built-in)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent (n8n Built-in)": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model (OVMS)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent (n8n Built-in)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Window Buffer Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent (n8n Built-in)",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Knowledge Base Lookup (Code Tool)": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent (n8n Built-in)",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Ticket (Code Tool)": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent (n8n Built-in)",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculator": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent (n8n Built-in)",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sentiment Analysis (Workflow Tool)": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent (n8n Built-in)",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

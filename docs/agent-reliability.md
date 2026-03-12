@@ -81,6 +81,56 @@ The agent takes different paths based on sentiment analysis results:
 | `get_current_time` | Returns current UTC timestamp | Built-in |
 | `list_models` | Lists models loaded in OVMS | Classic OVMS API |
 
+## Combined Workflow — n8n Built-in AI Agent + Custom OVMS Node
+
+In addition to the standalone custom agent, there is a **combined workflow** (`POST /support-v2`) that pairs the custom OVMS node with n8n's built-in AI Agent node.
+
+### Architecture
+
+```
+Webhook → Custom OVMS Node (DistilBERT sentiment) → n8n AI Agent (Qwen2.5 reasoning) → Respond
+```
+
+- **Custom OVMS node** runs sentiment classification — fast (~30ms), deterministic, no LLM overhead
+- **n8n AI Agent** receives the sentiment result and handles reasoning, KB lookup, and ticket creation using its built-in tool system
+
+### Sub-nodes Connected to the AI Agent
+
+| Sub-node | Role | Connection Type |
+|---|---|---|
+| **OpenAI Chat Model (OVMS)** | LLM brain — Qwen2.5-1.5B via gateway `/v1` proxy | `ai_languageModel` |
+| **Window Buffer Memory** | Stores agent's internal reasoning loop per execution | `ai_memory` |
+| **Sentiment Analysis** | Workflow Tool — calls sub-workflow that uses custom OVMS node for DistilBERT inference | `ai_tool` |
+| **Knowledge Base Lookup** | Code Tool — searches mock FAQ articles by keyword | `ai_tool` |
+| **Create Ticket** | Code Tool — creates prioritized support ticket | `ai_tool` |
+| **Calculator** | Pre-built n8n tool for math operations | `ai_tool` |
+
+### Gateway /v1 Proxy
+
+n8n's OpenAI Chat Model node calls `/v1/chat/completions` and `/v1/models`, but OVMS uses `/v3/`. The gateway proxies these requests:
+- `GET /v1/models` → `GET /v3/models` on OVMS-LLM
+- `POST /v1/chat/completions` → `POST /v3/chat/completions` on OVMS-LLM
+
+### Known Limitation: Small Model + Built-in AI Agent
+
+The n8n built-in AI Agent does **not** have the custom nudge system. With Qwen2.5-1.5B:
+- The agent often generates text responses directly instead of calling the code tools
+- It receives the sentiment data correctly but skips the KB lookup and create_ticket tool calls
+- It produces reasonable text output (mentions correct priority, drafts a response) but doesn't actually execute the tools
+
+This is the key comparison point: **the custom OVMS node with the nudge system reliably completes 4 tool calls, while the built-in AI Agent with the same small model tends to skip tools**. Larger models (7B+) would likely perform better with the built-in agent.
+
+### Custom Agent vs Built-in AI Agent
+
+| Aspect | Custom OVMS Agent (`/support`) | Built-in AI Agent (`/support-v2`) |
+|---|---|---|
+| Tool calling reliability | High (nudge system forces completion) | Lower (small model skips tools) |
+| Memory support | No | Yes (Window Buffer Memory) |
+| Tool ecosystem | Custom tools only | Code Tools + pre-built tools + workflow-as-a-tool |
+| Configuration | System prompt + tool JSON in node params | Visual sub-node connections in n8n canvas |
+| Extensibility | Requires code changes | Drag-and-drop new tools in n8n UI |
+| Best for | Small models that need guidance | Larger models or quick prototyping |
+
 ## Performance (Intel i7-1255U, 16GB RAM)
 
 | Metric | Value |

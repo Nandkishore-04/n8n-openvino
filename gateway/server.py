@@ -25,6 +25,7 @@ from transformers import AutoTokenizer
 # ─── Configuration ────────────────────────────────────────────────────────────
 
 OVMS_URL = os.environ.get("OVMS_URL", "http://localhost:9001")
+OVMS_LLM_URL = os.environ.get("OVMS_LLM_URL", "http://ovms-llm:8000")
 TOKENIZER_PATH = os.environ.get("TOKENIZER_PATH", "/models/tokenizer")
 PORT = int(os.environ.get("GATEWAY_PORT", "8000"))
 
@@ -83,6 +84,15 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 self.send_error_json(502, f"Cannot reach OVMS: {e}")
             return
 
+        # Proxy /v1/models to OVMS-LLM /v3/models (for n8n OpenAI Chat Model compatibility)
+        if path == "/v1/models":
+            try:
+                resp = requests.get(f"{OVMS_LLM_URL}/v3/models", timeout=10)
+                self.send_json(resp.json())
+            except Exception as e:
+                self.send_error_json(502, f"Cannot reach OVMS-LLM: {e}")
+            return
+
         # Proxy model status to OVMS
         if path.startswith("/v1/models/"):
             try:
@@ -103,6 +113,24 @@ class GatewayHandler(BaseHTTPRequestHandler):
             request_data = json.loads(body)
         except json.JSONDecodeError:
             self.send_error_json(400, "Invalid JSON")
+            return
+
+        # Proxy /v1/chat/completions → OVMS-LLM /v3/chat/completions
+        # (n8n's OpenAI Chat Model node calls /v1/, but OVMS uses /v3/)
+        if path == "/v1/chat/completions":
+            try:
+                resp = requests.post(
+                    f"{OVMS_LLM_URL}/v3/chat/completions",
+                    json=request_data,
+                    headers={"Content-Type": "application/json"},
+                    timeout=120,
+                )
+                self.send_response(resp.status_code)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(resp.content)
+            except Exception as e:
+                self.send_error_json(502, f"OVMS-LLM proxy failed: {e}")
             return
 
         device_hint = self.headers.get("X-Target-Device", "AUTO")

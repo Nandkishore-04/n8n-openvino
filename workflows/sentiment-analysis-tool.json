@@ -1,0 +1,79 @@
+{
+  "name": "Sentiment Analysis Tool (OVMS)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger-1",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [200, 400]
+    },
+    {
+      "parameters": {
+        "operation": "predict",
+        "modelName": "text-classifier",
+        "apiVersion": "v1",
+        "inputData": "={{ { \"text\": $json.query || $json.message || $json.text || 'No text provided' } }}"
+      },
+      "id": "ovms-predict-1",
+      "name": "OVMS Sentiment Analysis",
+      "type": "n8n-nodes-openvino.openVinoModelServer",
+      "typeVersion": 1,
+      "position": [500, 400],
+      "credentials": {
+        "openVinoModelServerApi": {
+          "id": "1",
+          "name": "OpenVINO Model Server API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "result",
+              "name": "response",
+              "value": "={{ 'Sentiment: ' + ($json.predictions ? $json.predictions[0].label : 'UNKNOWN') + ', Confidence: ' + ($json.predictions ? $json.predictions[0].confidence : 0) }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-1",
+      "name": "Format Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [800, 400]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "OVMS Sentiment Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OVMS Sentiment Analysis": {
+      "main": [
+        [
+          {
+            "node": "Format Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

@@ -57,9 +57,74 @@ The agent takes **different paths** depending on sentiment — 2 tool calls for 
   - **List Models** — view all models deployed on OVMS
   - **Get Model Status** — check if a model is loaded and ready
 - **7 built-in agent tools** — analyze_sentiment, lookup_knowledge_base, draft_response, create_ticket, calculate, get_current_time, list_models
+- **Combined workflow** — custom OVMS node (classification) + n8n AI Agent (reasoning) in a single pipeline
+- **Gateway /v1 proxy** — bridges n8n's OpenAI-compatible nodes to OVMS's /v3 API
 - **Webhook-triggered** — live API endpoint, testable with curl
 - **Device selection** — CPU, GPU, NPU, or AUTO (via OpenVINO's AUTO plugin)
 - **Docker Compose** — single command to start the entire stack (5 services)
+
+## Combined Workflow — n8n AI Agent + Custom OVMS Node
+
+### Workflow Canvas
+![combined workflow](docs/screenshots/combined-workflow.png)
+
+### Positive Message → Formatted Response
+![combined positive](docs/screenshots/combined-positive.png)
+
+### Negative Message → Raw Tool Call (Small Model Limitation)
+![combined negative](docs/screenshots/combined-negative.png)
+
+This workflow demonstrates **both** the custom OVMS node and n8n's built-in AI Agent working together in a single pipeline:
+
+```
+[Webhook: POST /support-v2]
+        |
+        v
+[Custom OVMS Node] — DistilBERT sentiment analysis (fast, deterministic)
+        |
+        v
+[n8n Built-in AI Agent] — Qwen2.5-1.5B on OVMS-LLM
+        ├── LLM: OpenAI Chat Model → OVMS-LLM (via Gateway /v1 proxy)
+        ├── Memory: Window Buffer Memory
+        └── Tools:
+            ├── Sentiment Analysis (Workflow Tool → sub-workflow using custom OVMS node)
+            ├── Knowledge Base Lookup (Code Tool)
+            ├── Create Ticket (Code Tool)
+            └── Calculator (pre-built tool)
+        |
+        v
+[Respond to Webhook] — returns sentiment + agent response
+```
+
+**Why this design?** Each component does what it's best at:
+- **Custom OVMS node** handles classification — fast, deterministic, no LLM overhead
+- **n8n AI Agent** handles reasoning — flexible tool orchestration with memory
+
+### Test the Combined Workflow
+
+```bash
+curl -X POST http://localhost:5678/webhook/support-v2 \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Your product broke after one day and nobody responds!"}'
+```
+
+### Setup Requirements
+
+1. Import `workflows/sentiment-analysis-tool.json` (sub-workflow used as a tool)
+2. Import `workflows/combined-support-agent.json` (main workflow)
+3. Create an **OpenAI API** credential in n8n:
+   - Name: `OVMS LLM (OpenAI Compatible)`
+   - API Key: `not-needed` (OVMS ignores it, but n8n requires non-empty)
+   - Base URL: `http://gateway:8000/v1`
+4. Activate both workflows
+
+### Gateway /v1 Proxy
+
+The gateway proxies n8n's OpenAI-compatible requests to OVMS's `/v3` API:
+- `GET /v1/models` → `GET /v3/models` on OVMS-LLM
+- `POST /v1/chat/completions` → `POST /v3/chat/completions` on OVMS-LLM
+
+This lets n8n's built-in OpenAI Chat Model node work with OVMS without any patches.
 
 ## Project Structure
 
@@ -71,7 +136,7 @@ n8n-openvino/
 ├── credentials/
 │   └── OpenVinoModelServerApi.credentials.ts
 ├── gateway/
-│   ├── server.py                     # Tokenization gateway (Python)
+│   ├── server.py                     # Tokenization gateway + /v1 proxy (Python)
 │   └── Dockerfile
 ├── deployment/
 │   ├── docker-compose.yml            # 5 services: OVMS, OVMS-LLM, Gateway, n8n, PostgreSQL
@@ -79,6 +144,10 @@ n8n-openvino/
 │   ├── models/                       # Model files (not in git)
 │   │   ├── text-classifier/1/        # DistilBERT OpenVINO IR (model.xml + model.bin)
 │   │   └── tokenizer-backup/         # HuggingFace tokenizer files
+├── workflows/
+│   ├── agentic-tool-calling.json     # Custom OVMS agent workflow (standalone)
+│   ├── combined-support-agent.json   # Combined AI Agent + OVMS node workflow
+│   └── sentiment-analysis-tool.json  # Sub-workflow for sentiment (workflow-as-a-tool)
 ├── docs/
 │   └── agent-reliability.md          # Agent reliability and error handling notes
 ├── package.json
@@ -166,6 +235,8 @@ This project uses **two instances** of the official OVMS container (`openvino/mo
 | **OVMS-LLM** | Qwen2.5-1.5B | Chat + tool calling | OpenAI-compatible `/v3/chat/completions` |
 
 The **agentic workflow** demonstrates both instances collaborating: the LLM on OVMS-LLM decides to call the `analyze_sentiment` tool, which routes through the Gateway to the classic OVMS for inference. Two OVMS instances, orchestrated by n8n.
+
+The Gateway also proxies `/v1/chat/completions` → `/v3/chat/completions` so n8n's built-in OpenAI Chat Model node can use OVMS-LLM without modification.
 
 ## Agentic Workflow Demo — Customer Support Triage
 

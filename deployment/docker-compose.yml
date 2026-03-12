@@ -52,6 +52,7 @@ services:
       - "8000:8000"
     environment:
       - OVMS_URL=http://ovms:9001
+      - OVMS_LLM_URL=http://ovms-llm:8000
       - TOKENIZER_PATH=/models/tokenizer
       - GATEWAY_PORT=8000
     volumes:
