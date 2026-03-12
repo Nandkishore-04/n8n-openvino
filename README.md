@@ -34,18 +34,11 @@ The agent takes **different paths** depending on sentiment — 2 tool calls for 
 - **OVMS-LLM** — serves Qwen2.5-1.5B with OpenAI-compatible chat API and tool calling
 - **Gateway** — preprocessor that tokenizes text for classic model inference
 
-## Demo
+## Demo — Custom OVMS Agent (`/support`)
 
-### Workflow Canvas
 ![n8n workflow](docs/screenshots/workflow.png)
-
-### Node Configuration (Agent Loop)
 ![node config](docs/screenshots/node-config.png)
-
-### Negative Message → NEGATIVE Sentiment, Ticket Created
 ![postman negative](docs/screenshots/postman-negative.png)
-
-### Positive Message → POSITIVE Sentiment, Ticket Created
 ![postman positive](docs/screenshots/postman-positive.png)
 
 ## Features
@@ -63,16 +56,13 @@ The agent takes **different paths** depending on sentiment — 2 tool calls for 
 - **Device selection** — CPU, GPU, NPU, or AUTO (via OpenVINO's AUTO plugin)
 - **Docker Compose** — single command to start the entire stack (5 services)
 
-## Combined Workflow — n8n AI Agent + Custom OVMS Node
+## Demo — Combined Workflow (`/support-v2`)
 
-### Workflow Canvas
 ![combined workflow](docs/screenshots/combined-workflow.png)
-
-### Positive Message → Formatted Response
 ![combined positive](docs/screenshots/combined-positive.png)
-
-### Negative Message → Raw Tool Call (Small Model Limitation)
 ![combined negative](docs/screenshots/combined-negative.png)
+
+## Combined Workflow — n8n AI Agent + Custom OVMS Node
 
 This workflow demonstrates **both** the custom OVMS node and n8n's built-in AI Agent working together in a single pipeline:
 
